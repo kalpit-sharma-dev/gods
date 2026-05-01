@@ -3,9 +3,9 @@ package parallel
 import (
 	"testing"
 
-	"github.com/yourusername/gods/dataframe"
-	"github.com/yourusername/gods/expr"
-	"github.com/yourusername/gods/series"
+	"github.com/kalpit-sharma-dev/gods/dataframe"
+	"github.com/kalpit-sharma-dev/gods/expr"
+	"github.com/kalpit-sharma-dev/gods/series"
 )
 
 func TestMapReduceFilter(t *testing.T) {

@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strconv"
 
-	"github.com/yourusername/gods/series"
+	"github.com/kalpit-sharma-dev/gods/series"
 )
 
 // AggFunc is an aggregation function identifier.

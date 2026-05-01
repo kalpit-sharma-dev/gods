@@ -1,6 +1,6 @@
 package io
 
-import "github.com/yourusername/gods/dataframe"
+import "github.com/kalpit-sharma-dev/gods/dataframe"
 
 // ParquetReader is the interface a Parquet backend must implement.
 type ParquetReader interface {

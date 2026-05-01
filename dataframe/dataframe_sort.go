@@ -5,7 +5,7 @@ import (
 	"math"
 	"sort"
 
-	"github.com/yourusername/gods/series"
+	"github.com/kalpit-sharma-dev/gods/series"
 )
 
 // SortKey describes one sort level.

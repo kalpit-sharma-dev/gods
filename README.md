@@ -15,7 +15,7 @@
 ## Install
 
 ```bash
-go get github.com/yourusername/gods
+go get github.com/kalpit-sharma-dev/gods
 ```
 
 ## Quick Start
@@ -27,12 +27,12 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/yourusername/gods/dataframe"
-	"github.com/yourusername/gods/expr"
-	godsio "github.com/yourusername/gods/io"
-	"github.com/yourusername/gods/parallel"
-	"github.com/yourusername/gods/series"
-	"github.com/yourusername/gods/stats"
+	"github.com/kalpit-sharma-dev/gods/dataframe"
+	"github.com/kalpit-sharma-dev/gods/expr"
+	godsio "github.com/kalpit-sharma-dev/gods/io"
+	"github.com/kalpit-sharma-dev/gods/parallel"
+	"github.com/kalpit-sharma-dev/gods/series"
+	"github.com/kalpit-sharma-dev/gods/stats"
 )
 
 func main() {

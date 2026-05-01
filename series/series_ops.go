@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/yourusername/gods/internal/bitmap"
-	"github.com/yourusername/gods/internal/util"
+	"github.com/kalpit-sharma-dev/gods/internal/bitmap"
+	"github.com/kalpit-sharma-dev/gods/internal/util"
 )
 
 // Map applies fn to every non-null element and propagates nulls.

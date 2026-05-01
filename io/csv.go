@@ -7,8 +7,8 @@ import (
 	"sort"
 	"strconv"
 
-	"github.com/yourusername/gods/dataframe"
-	"github.com/yourusername/gods/series"
+	"github.com/kalpit-sharma-dev/gods/dataframe"
+	"github.com/kalpit-sharma-dev/gods/series"
 )
 
 // CSVReadOptions configures CSV reading behavior.

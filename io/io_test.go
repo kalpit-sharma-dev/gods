@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/yourusername/gods/dataframe"
+	"github.com/kalpit-sharma-dev/gods/dataframe"
 )
 
 func TestCSVReadWriteRoundTrip(t *testing.T) {

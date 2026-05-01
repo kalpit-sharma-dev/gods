@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/yourusername/gods/expr"
+	"github.com/kalpit-sharma-dev/gods/expr"
 )
 
 func TestDataFrameBasicOps(t *testing.T) {

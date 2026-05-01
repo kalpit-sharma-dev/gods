@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yourusername/gods/internal/util"
-	"github.com/yourusername/gods/series"
+	"github.com/kalpit-sharma-dev/gods/internal/util"
+	"github.com/kalpit-sharma-dev/gods/series"
 )
 
 // column is the untyped internal interface all Series implement.

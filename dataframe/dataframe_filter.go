@@ -3,8 +3,8 @@ package dataframe
 import (
 	"fmt"
 
-	"github.com/yourusername/gods/expr"
-	"github.com/yourusername/gods/series"
+	"github.com/kalpit-sharma-dev/gods/expr"
+	"github.com/kalpit-sharma-dev/gods/series"
 )
 
 // Row is passed to filter and transformation predicates.

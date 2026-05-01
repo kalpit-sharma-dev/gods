@@ -1,4 +1,4 @@
-module github.com/yourusername/gods
+module github.com/kalpit-sharma-dev/gods
 
 go 1.21
 

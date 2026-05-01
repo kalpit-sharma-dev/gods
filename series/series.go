@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yourusername/gods/internal/bitmap"
-	"github.com/yourusername/gods/internal/util"
+	"github.com/kalpit-sharma-dev/gods/internal/bitmap"
+	"github.com/kalpit-sharma-dev/gods/internal/util"
 )
 
 // Series is a typed 1D column with a validity bitmap.
