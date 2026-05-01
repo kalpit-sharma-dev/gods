@@ -3,7 +3,6 @@ package dataframe
 import (
 	"fmt"
 	"sort"
-	"strings"
 )
 
 // JoinType specifies DataFrame join strategy.
@@ -43,12 +42,14 @@ func Join(left, right *DataFrame, on []string, how JoinType, suffixes [2]string)
 	leftIndex := map[string][]int{}
 	for i := 0; i < left.rowLen; i++ {
 		key := joinKey(left, i, on)
-		leftIndex[key] = append(leftIndex[key], i)
+		encoded := encodeCompositeKey(key)
+		leftIndex[encoded] = append(leftIndex[encoded], i)
 	}
 	rightIndex := map[string][]int{}
 	for i := 0; i < right.rowLen; i++ {
 		key := joinKey(right, i, on)
-		rightIndex[key] = append(rightIndex[key], i)
+		encoded := encodeCompositeKey(key)
+		rightIndex[encoded] = append(rightIndex[encoded], i)
 	}
 
 	keys := map[string]struct{}{}
@@ -78,19 +79,22 @@ func Join(left, right *DataFrame, on []string, how JoinType, suffixes [2]string)
 		return nil, fmt.Errorf("gods/dataframe: unsupported join type %q", how)
 	}
 
-	keyOrder := make([]string, 0, len(keys))
+	keyOrder := make([]compositeKey, 0, len(keys))
 	for k := range keys {
-		keyOrder = append(keyOrder, k)
+		keyOrder = append(keyOrder, decodeCompositeKey(k))
 	}
-	sort.Strings(keyOrder)
+	sort.Slice(keyOrder, func(i, j int) bool {
+		return compareCompositeKey(keyOrder[i], keyOrder[j]) < 0
+	})
 
 	rightNameMap := buildJoinedNameMap(right, on, suffixes[1], left.index)
 	leftNameMap := buildJoinedNameMap(left, on, suffixes[0], right.index)
 
 	rows := make([]map[string]any, 0)
 	for _, k := range keyOrder {
-		ls := leftIndex[k]
-		rs := rightIndex[k]
+		encoded := encodeCompositeKey(k)
+		ls := leftIndex[encoded]
+		rs := rightIndex[encoded]
 		if len(ls) == 0 {
 			ls = []int{-1}
 		}
@@ -168,18 +172,18 @@ func Concat(dfs []*DataFrame, ignoreIndex bool) (*DataFrame, error) {
 	return dataFrameFromRows(rows)
 }
 
-func joinKey(df *DataFrame, row int, on []string) string {
-	parts := make([]string, len(on))
+func joinKey(df *DataFrame, row int, on []string) compositeKey {
+	values := make([]any, len(on))
 	for i, k := range on {
 		c, _ := df.Col(k)
 		v, ok := c.at(row)
 		if !ok {
-			parts[i] = "<null>"
+			values[i] = nil
 		} else {
-			parts[i] = fmt.Sprintf("%v", v)
+			values[i] = v
 		}
 	}
-	return strings.Join(parts, "||")
+	return compositeKey(values)
 }
 
 func buildJoinedNameMap(df *DataFrame, on []string, suffix string, other map[string]int) map[string]string {

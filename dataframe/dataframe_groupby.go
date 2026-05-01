@@ -5,7 +5,6 @@ import (
 	"math"
 	"sort"
 	"strconv"
-	"strings"
 
 	"github.com/yourusername/gods/series"
 )
@@ -54,17 +53,17 @@ func (df *DataFrame) GroupBy(columns ...string) (*GroupBy, error) {
 	}
 	groups := make(map[string][]int)
 	for i := 0; i < df.rowLen; i++ {
-		keyParts := make([]string, len(columns))
-		for j, colName := range columns {
+		keyParts := make(compositeKey, len(columns))
+		for _, colName := range columns {
 			col, _ := df.Col(colName)
 			v, ok := col.at(i)
 			if !ok {
-				keyParts[j] = "<null>"
+				keyParts = append(keyParts, nil)
 				continue
 			}
-			keyParts[j] = fmt.Sprintf("%v", v)
+			keyParts = append(keyParts, v)
 		}
-		key := strings.Join(keyParts, "||")
+		key := encodeCompositeKey(keyParts)
 		groups[key] = append(groups[key], i)
 	}
 	return &GroupBy{df: df, byKeys: append([]string(nil), columns...), groups: groups}, nil
@@ -87,15 +86,19 @@ func (g *GroupBy) Agg(spec map[string]AggFunc) (*DataFrame, error) {
 	for _, gk := range groupKeys {
 		indices := g.groups[gk]
 		row := map[string]any{}
-		for i, by := range g.byKeys {
-			parts := strings.Split(gk, "||")
-			if i < len(parts) {
-				p := parts[i]
-				if p == "<null>" {
-					row[by] = nil
-				} else {
-					row[by] = p
+		if len(indices) > 0 {
+			anchor := indices[0]
+			for _, by := range g.byKeys {
+				col, err := g.df.Col(by)
+				if err != nil {
+					return nil, err
 				}
+				v, ok := col.at(anchor)
+				if !ok {
+					row[by] = nil
+					continue
+				}
+				row[by] = v
 			}
 		}
 		for colName, fn := range spec {

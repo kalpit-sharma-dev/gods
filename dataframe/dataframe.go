@@ -59,6 +59,96 @@ type DataFrame struct {
 	rowLen int
 }
 
+type compositeKey []any
+
+func encodeCompositeKey(k compositeKey) string {
+	parts := make([]string, len(k))
+	for i, v := range k {
+		if v == nil {
+			parts[i] = "<nil>"
+			continue
+		}
+		parts[i] = fmt.Sprintf("%T:%v", v, v)
+	}
+	return strings.Join(parts, "\x1f")
+}
+
+func decodeCompositeKey(encoded string) compositeKey {
+	if encoded == "" {
+		return compositeKey{}
+	}
+	parts := strings.Split(encoded, "\x1f")
+	out := make(compositeKey, len(parts))
+	for i, p := range parts {
+		if p == "<nil>" {
+			out[i] = nil
+			continue
+		}
+		typeIdx := strings.IndexByte(p, ':')
+		if typeIdx <= 0 || typeIdx+1 >= len(p) {
+			out[i] = p
+			continue
+		}
+		typeName := p[:typeIdx]
+		raw := p[typeIdx+1:]
+		switch typeName {
+		case "int":
+			var v int
+			if _, err := fmt.Sscanf(raw, "%d", &v); err == nil {
+				out[i] = v
+				continue
+			}
+		case "int64":
+			var v int64
+			if _, err := fmt.Sscanf(raw, "%d", &v); err == nil {
+				out[i] = v
+				continue
+			}
+		case "float64":
+			var v float64
+			if _, err := fmt.Sscanf(raw, "%f", &v); err == nil {
+				out[i] = v
+				continue
+			}
+		case "bool":
+			if raw == "true" {
+				out[i] = true
+				continue
+			}
+			if raw == "false" {
+				out[i] = false
+				continue
+			}
+		case "string":
+			out[i] = raw
+			continue
+		}
+		out[i] = raw
+	}
+	return out
+}
+
+func compareCompositeKey(a, b compositeKey) int {
+	n := len(a)
+	if len(b) < n {
+		n = len(b)
+	}
+	for i := 0; i < n; i++ {
+		cmp := compareValues(a[i], b[i])
+		if cmp != 0 {
+			return cmp
+		}
+	}
+	switch {
+	case len(a) < len(b):
+		return -1
+	case len(a) > len(b):
+		return 1
+	default:
+		return 0
+	}
+}
+
 // New constructs a DataFrame from internal columns.
 func New(columns ...column) (*DataFrame, error) {
 	df := &DataFrame{
@@ -404,15 +494,23 @@ func (df *DataFrame) filterWithMask(mask []bool) *DataFrame {
 }
 
 func (df *DataFrame) selectRows(indices []int) (*DataFrame, error) {
-	rows := make([]map[string]any, 0, len(indices))
-	for _, idx := range indices {
-		r, err := df.Row(idx)
-		if err != nil {
-			return nil, err
-		}
-		rows = append(rows, r)
+	if df == nil {
+		return nil, fmt.Errorf("gods/dataframe: nil dataframe")
 	}
-	return dataFrameFromRows(rows)
+	for _, idx := range indices {
+		if idx < 0 || idx >= df.rowLen {
+			return nil, fmt.Errorf("gods/dataframe: row index %d out of bounds [0,%d)", idx, df.rowLen)
+		}
+	}
+	cols := make([]column, len(df.cols))
+	for i, c := range df.cols {
+		next, err := takeColumnRows(c, indices)
+		if err != nil {
+			return nil, fmt.Errorf("gods/dataframe: take rows for column %q: %w", c.Name(), err)
+		}
+		cols[i] = next
+	}
+	return New(cols...)
 }
 
 func dataFrameFromRows(rows []map[string]any) (*DataFrame, error) {
@@ -430,7 +528,7 @@ func dataFrameFromRows(rows []map[string]any) (*DataFrame, error) {
 		cols = append(cols, c)
 	}
 	sort.Strings(cols)
-	data := make(map[string]any, len(cols))
+	builtCols := make([]column, 0, len(cols))
 	for _, name := range cols {
 		values := make([]any, len(rows))
 		nullMask := make([]bool, len(rows))
@@ -442,9 +540,13 @@ func dataFrameFromRows(rows []map[string]any) (*DataFrame, error) {
 			}
 			values[i] = v
 		}
-		data[name] = series.WithNulls(name, values, nullMask)
+		col, err := inferSeriesColumn(name, values, nullMask)
+		if err != nil {
+			return nil, fmt.Errorf("gods/dataframe: infer column %q from rows: %w", name, err)
+		}
+		builtCols = append(builtCols, col)
 	}
-	return FromMap(data)
+	return New(builtCols...)
 }
 
 func adaptToColumn(name string, v any) (column, error) {
@@ -660,6 +762,85 @@ func numericToFloat64(v any) (float64, bool) {
 		return x, true
 	default:
 		return 0, false
+	}
+}
+
+func takeColumnRows(c column, indices []int) (column, error) {
+	switch s := c.toSeriesAny().(type) {
+	case *series.Series[int64]:
+		values := make([]int64, len(indices))
+		nullMask := make([]bool, len(indices))
+		for i, idx := range indices {
+			v, ok := s.At(idx)
+			if !ok {
+				nullMask[i] = true
+				continue
+			}
+			values[i] = v
+		}
+		return &seriesAdapter[int64]{s: series.WithNulls(s.Name(), values, nullMask)}, nil
+	case *series.Series[float64]:
+		values := make([]float64, len(indices))
+		nullMask := make([]bool, len(indices))
+		for i, idx := range indices {
+			v, ok := s.At(idx)
+			if !ok {
+				nullMask[i] = true
+				continue
+			}
+			values[i] = v
+		}
+		return &seriesAdapter[float64]{s: series.WithNulls(s.Name(), values, nullMask)}, nil
+	case *series.Series[bool]:
+		values := make([]bool, len(indices))
+		nullMask := make([]bool, len(indices))
+		for i, idx := range indices {
+			v, ok := s.At(idx)
+			if !ok {
+				nullMask[i] = true
+				continue
+			}
+			values[i] = v
+		}
+		return &seriesAdapter[bool]{s: series.WithNulls(s.Name(), values, nullMask)}, nil
+	case *series.Series[string]:
+		values := make([]string, len(indices))
+		nullMask := make([]bool, len(indices))
+		for i, idx := range indices {
+			v, ok := s.At(idx)
+			if !ok {
+				nullMask[i] = true
+				continue
+			}
+			values[i] = v
+		}
+		return &seriesAdapter[string]{s: series.WithNulls(s.Name(), values, nullMask)}, nil
+	case *series.Series[time.Time]:
+		values := make([]time.Time, len(indices))
+		nullMask := make([]bool, len(indices))
+		for i, idx := range indices {
+			v, ok := s.At(idx)
+			if !ok {
+				nullMask[i] = true
+				continue
+			}
+			values[i] = v
+		}
+		return &seriesAdapter[time.Time]{s: series.WithNulls(s.Name(), values, nullMask)}, nil
+	case *series.Series[any]:
+		values := make([]any, len(indices))
+		nullMask := make([]bool, len(indices))
+		for i, idx := range indices {
+			v, ok := s.At(idx)
+			if !ok {
+				nullMask[i] = true
+				continue
+			}
+			values[i] = v
+		}
+		return &seriesAdapter[any]{s: series.WithNulls(s.Name(), values, nullMask)}, nil
+	default:
+		return nil, fmt.Errorf("unsupported column series type %T", c.toSeriesAny())
 	}
 }
 
