@@ -1,12 +1,17 @@
-* @kalpit-sharma-dev
+# Replace the example owners below with your team members or groups.
+# Example:
+# * @your-org/engineering
 
-# Core libraries
-/dataframe/ @kalpit-sharma-dev
-/ndarray/ @kalpit-sharma-dev
-/series/ @kalpit-sharma-dev
-/parallel/ @kalpit-sharma-dev
-/io/ @kalpit-sharma-dev
-/stats/ @kalpit-sharma-dev
+# Global default owners
+* @your-org/engineering
+
+# Core libraries (customize by ownership boundaries)
+/dataframe/ @your-org/data-platform
+/ndarray/ @your-org/data-platform
+/series/ @your-org/data-platform
+/parallel/ @your-org/data-platform
+/io/ @your-org/data-platform
+/stats/ @your-org/data-platform
 
 # CI and release config
-/.github/ @kalpit-sharma-dev
+/.github/ @your-org/dev-experience

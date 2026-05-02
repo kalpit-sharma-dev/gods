@@ -2,6 +2,11 @@
 - What changed?
 - Why was this needed?
 
+## Repo-specific policy checks
+- [ ] Coverage threshold target for this repo is respected (see `.github/workflows/workflow-options.md`)
+- [ ] Security scan exclusions (if any) are intentional and documented
+- [ ] Benchmark scope and regression threshold are configured for this repo
+
 ## Type of change
 - [ ] Bug fix
 - [ ] New feature

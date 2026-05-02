@@ -1,0 +1,103 @@
+name: Go Performance Reusable
+
+on:
+  workflow_call:
+    inputs:
+      benchmark_packages:
+        description: Space-separated package list for benchmark command
+        required: false
+        type: string
+        default: "./..."
+      benchmark_pattern:
+        description: Regex pattern for benchmark names
+        required: false
+        type: string
+        default: "."
+      max_regression_pct:
+        description: Maximum allowed regression percent
+        required: false
+        type: number
+        default: 20
+      benchmark_artifact_name:
+        description: Artifact name for benchmark outputs
+        required: false
+        type: string
+        default: "benchmark-results"
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run baseline benchmarks (base branch)
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          git fetch origin "${{ github.base_ref }}"
+          git checkout --detach "origin/${{ github.base_ref }}"
+          go test ${{ inputs.benchmark_packages }} -run=^$ -bench='${{ inputs.benchmark_pattern }}' -benchmem -count=1 > /tmp/bench-base.txt
+
+      - name: Run benchmarks (current branch)
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git checkout --detach "${{ github.sha }}"
+          fi
+          go test ${{ inputs.benchmark_packages }} -run=^$ -bench='${{ inputs.benchmark_pattern }}' -benchmem -count=1 > /tmp/bench-head.txt
+
+      - name: Compare benchmark results
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          MAX_PCT="${{ inputs.max_regression_pct }}"
+          awk '
+          function pct(old, now) {
+            if (old == 0) return 0;
+            return ((now-old)/old)*100.0;
+          }
+          FNR==NR && $1 ~ /^Benchmark/ {
+            base_ns[$1] = $3;
+            base_b[$1] = $5;
+            base_a[$1] = $7;
+            next
+          }
+          $1 ~ /^Benchmark/ {
+            bench=$1;
+            if (!(bench in base_ns)) next;
+            pns = pct(base_ns[bench], $3);
+            pb = pct(base_b[bench], $5);
+            pa = pct(base_a[bench], $7);
+            printf "%s: ns/op %.2f%%, B/op %.2f%%, allocs/op %.2f%%\n", bench, pns, pb, pa;
+            if (pns > ENVIRON["MAX_PCT"] || pb > ENVIRON["MAX_PCT"] || pa > ENVIRON["MAX_PCT"]) {
+              printf "Regression too high for %s (threshold %s%%)\n", bench, ENVIRON["MAX_PCT"];
+              failed=1;
+            }
+          }
+          END {
+            if (failed) exit 1;
+          }' /tmp/bench-base.txt /tmp/bench-head.txt
+
+      - name: Upload benchmark artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.benchmark_artifact_name }}
+          path: |
+            /tmp/bench-base.txt
+            /tmp/bench-head.txt

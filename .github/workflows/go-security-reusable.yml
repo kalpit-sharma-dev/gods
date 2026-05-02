@@ -1,0 +1,58 @@
+name: Reusable Go Security
+
+on:
+  workflow_call:
+    inputs:
+      go_version_file:
+        description: Path to go.mod or version file used by setup-go.
+        required: false
+        type: string
+        default: go.mod
+      go_toolchain:
+        description: Optional go toolchain (e.g. go1.25.9) for govulncheck install/run.
+        required: false
+        type: string
+        default: go1.25.9
+      govulncheck_packages:
+        description: Package patterns to scan.
+        required: false
+        type: string
+        default: ./...
+      run_govulncheck:
+        description: Whether to run govulncheck.
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  govulncheck:
+    if: inputs.run_govulncheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ inputs.go_version_file }}
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Install govulncheck
+        env:
+          GOTOOLCHAIN: ${{ inputs.go_toolchain }}
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Run govulncheck
+        env:
+          GOTOOLCHAIN: ${{ inputs.go_toolchain }}
+        run: govulncheck ${{ inputs.govulncheck_packages }}
