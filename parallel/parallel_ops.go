@@ -35,13 +35,19 @@ func Map[T any](pool *Pool, s *series.Series[T], fn func(T) T, chunkSize int) *s
 		go func() {
 			defer wg.Done()
 			for r := range jobs {
+				localVals := make([]T, r[1]-r[0])
+				localNulls := make([]bool, r[1]-r[0])
 				for i := r[0]; i < r[1]; i++ {
 					v, ok := s.At(i)
 					if !ok {
-						nullMask[i] = true
+						localNulls[i-r[0]] = true
 						continue
 					}
-					outVals[i] = fn(v)
+					localVals[i-r[0]] = fn(v)
+				}
+				for i := r[0]; i < r[1]; i++ {
+					outVals[i] = localVals[i-r[0]]
+					nullMask[i] = localNulls[i-r[0]]
 				}
 			}
 		}()
@@ -104,9 +110,13 @@ func Filter[T any](pool *Pool, s *series.Series[T], fn func(T) bool) *series.Ser
 		wg.Add(1)
 		go func(start, end int) {
 			defer wg.Done()
+			localKeep := make([]bool, end-start)
 			for i := start; i < end; i++ {
 				v, ok := s.At(i)
-				keep[i] = ok && fn(v)
+				localKeep[i-start] = ok && fn(v)
+			}
+			for i := start; i < end; i++ {
+				keep[i] = localKeep[i-start]
 			}
 		}(r[0], r[1])
 	}

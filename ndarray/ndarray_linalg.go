@@ -149,7 +149,14 @@ func Det(a *NDArray[float64]) (float64, error) {
 	return det, nil
 }
 
-// SVD computes a simple approximate SVD where U and Vt are identity and S contains singular values.
+// SVD computes an approximate singular value decomposition for real matrices.
+//
+// This implementation derives V from the eigendecomposition of A^T A using a
+// Jacobi iteration, then computes U = A*V*Sigma^{-1}. It is suitable for small
+// to medium dense matrices where a pure-Go approximation is acceptable.
+// Convergence and numerical stability are controlled by fixed tolerances and a
+// bounded iteration count; callers requiring high-precision LAPACK-grade SVD
+// should use a dedicated numerical backend.
 func SVD(a *NDArray[float64]) (U, S, Vt *NDArray[float64], err error) {
 	if a == nil {
 		return nil, nil, nil, fmt.Errorf("gods/ndarray: svd requires non-nil array")

@@ -1,7 +1,6 @@
 package dataframe
 
 import (
-	"encoding/binary"
 	"fmt"
 	"math"
 	"math/rand"
@@ -230,12 +229,6 @@ func compareUint64(a, b uint64) int {
 	default:
 		return 0
 	}
-}
-
-func float64Bits(v float64) uint64 {
-	var bytes [8]byte
-	binary.LittleEndian.PutUint64(bytes[:], math.Float64bits(v))
-	return binary.LittleEndian.Uint64(bytes[:])
 }
 
 // New constructs a DataFrame from internal columns.
