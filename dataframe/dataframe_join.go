@@ -79,22 +79,19 @@ func Join(left, right *DataFrame, on []string, how JoinType, suffixes [2]string)
 		return nil, fmt.Errorf("gods/dataframe: unsupported join type %q", how)
 	}
 
-	keyOrder := make([]compositeKey, 0, len(keys))
+	keyOrder := make([]string, 0, len(keys))
 	for k := range keys {
-		keyOrder = append(keyOrder, decodeCompositeKey(k))
+		keyOrder = append(keyOrder, k)
 	}
-	sort.Slice(keyOrder, func(i, j int) bool {
-		return compareCompositeKey(keyOrder[i], keyOrder[j]) < 0
-	})
+	sort.Strings(keyOrder)
 
 	rightNameMap := buildJoinedNameMap(right, on, suffixes[1], left.index)
 	leftNameMap := buildJoinedNameMap(left, on, suffixes[0], right.index)
 
 	rows := make([]map[string]any, 0)
 	for _, k := range keyOrder {
-		encoded := encodeCompositeKey(k)
-		ls := leftIndex[encoded]
-		rs := rightIndex[encoded]
+		ls := leftIndex[k]
+		rs := rightIndex[k]
 		if len(ls) == 0 {
 			ls = []int{-1}
 		}
@@ -146,30 +143,54 @@ func Concat(dfs []*DataFrame, ignoreIndex bool) (*DataFrame, error) {
 		colNames = append(colNames, c)
 	}
 	sort.Strings(colNames)
-	rows := make([]map[string]any, 0)
+
+	totalRows := 0
 	for _, df := range dfs {
 		if df == nil {
 			continue
 		}
-		for i := 0; i < df.rowLen; i++ {
-			row := map[string]any{}
-			for _, name := range colNames {
-				col, err := df.Col(name)
-				if err != nil {
-					row[name] = nil
+		totalRows += df.rowLen
+	}
+	if totalRows == 0 {
+		return Empty(), nil
+	}
+
+	built := make([]column, 0, len(colNames))
+	for _, name := range colNames {
+		values := make([]any, 0, totalRows)
+		nullMask := make([]bool, 0, totalRows)
+		for _, df := range dfs {
+			if df == nil {
+				continue
+			}
+			c, err := df.Col(name)
+			if err != nil {
+				for i := 0; i < df.rowLen; i++ {
+					var zero any
+					values = append(values, zero)
+					nullMask = append(nullMask, true)
+				}
+				continue
+			}
+			for i := 0; i < df.rowLen; i++ {
+				v, ok := c.at(i)
+				if !ok {
+					var zero any
+					values = append(values, zero)
+					nullMask = append(nullMask, true)
 					continue
 				}
-				v, ok := col.at(i)
-				if !ok {
-					row[name] = nil
-				} else {
-					row[name] = v
-				}
+				values = append(values, v)
+				nullMask = append(nullMask, false)
 			}
-			rows = append(rows, row)
 		}
+		col, err := inferSeriesColumn(name, values, nullMask)
+		if err != nil {
+			return nil, fmt.Errorf("gods/dataframe: concat infer column %q: %w", name, err)
+		}
+		built = append(built, col)
 	}
-	return dataFrameFromRows(rows)
+	return New(built...)
 }
 
 func joinKey(df *DataFrame, row int, on []string) compositeKey {

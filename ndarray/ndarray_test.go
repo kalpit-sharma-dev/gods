@@ -1,6 +1,9 @@
 package ndarray
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
 func TestAddAndMatMul(t *testing.T) {
 	a, _ := FromSlice([]float64{1, 2, 3, 4}, 2, 2)
@@ -38,5 +41,63 @@ func TestReshapeAndTranspose(t *testing.T) {
 	}
 	if tr.At(1, 0) != 2 {
 		t.Fatalf("transpose value mismatch")
+	}
+}
+
+func TestSolveStable(t *testing.T) {
+	a, _ := FromSlice([]float64{
+		3, 1,
+		1, 2,
+	}, 2, 2)
+	b, _ := FromSlice([]float64{9, 8}, 2)
+	x, err := Solve(a, b)
+	if err != nil {
+		t.Fatalf("Solve error: %v", err)
+	}
+	if got := x.At(0); math.Abs(got-2) > 1e-9 {
+		t.Fatalf("x0=%v want 2", got)
+	}
+	if got := x.At(1); math.Abs(got-3) > 1e-9 {
+		t.Fatalf("x1=%v want 3", got)
+	}
+}
+
+func TestSVDReconstruction(t *testing.T) {
+	a, _ := FromSlice([]float64{
+		3, 1,
+		0, 2,
+	}, 2, 2)
+	u, s, vt, err := SVD(a)
+	if err != nil {
+		t.Fatalf("SVD error: %v", err)
+	}
+	if u == nil || s == nil || vt == nil {
+		t.Fatalf("SVD returned nil component")
+	}
+	sdiag := zeros2D(2, 2)
+	sdiag.Set(s.At(0), 0, 0)
+	sdiag.Set(s.At(1), 1, 1)
+	us, err := MatMul(u, sdiag)
+	if err != nil {
+		t.Fatalf("MatMul(U,S) error: %v", err)
+	}
+	recon, err := MatMul(us, vt)
+	if err != nil {
+		t.Fatalf("MatMul(US,Vt) error: %v", err)
+	}
+	for i := 0; i < 2; i++ {
+		for j := 0; j < 2; j++ {
+			if math.Abs(recon.At(i, j)-a.At(i, j)) > 1e-5 {
+				t.Fatalf("reconstruction mismatch at (%d,%d): got %v want %v", i, j, recon.At(i, j), a.At(i, j))
+			}
+		}
+	}
+}
+
+func zeros2D(r, c int) *NDArray[float64] {
+	return &NDArray[float64]{
+		data:    make([]float64, r*c),
+		shape:   []int{r, c},
+		strides: []int{c, 1},
 	}
 }

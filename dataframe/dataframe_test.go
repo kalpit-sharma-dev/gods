@@ -3,6 +3,7 @@ package dataframe
 import (
 	"math"
 	"testing"
+	"time"
 
 	"github.com/kalpit-sharma-dev/gods/expr"
 )
@@ -173,5 +174,45 @@ func TestRankDenseMonotonic(t *testing.T) {
 		if math.Abs(v-w) > 1e-9 {
 			t.Fatalf("rank[%d]=%v want %v", i, v, w)
 		}
+	}
+}
+
+func TestCompareValuesLargeInt64Precision(t *testing.T) {
+	// Values differ by 1 but cannot be represented distinctly in float64.
+	a := int64(9_223_372_036_854_775_000)
+	b := int64(9_223_372_036_854_774_999)
+	if compareValues(a, b) <= 0 {
+		t.Fatalf("expected a>b for large int64 values, got compare=%d", compareValues(a, b))
+	}
+}
+
+func TestJoinOnTimeKeys(t *testing.T) {
+	t1 := time.Date(2026, 5, 2, 0, 0, 0, 0, time.UTC)
+	t2 := t1.Add(24 * time.Hour)
+	left, err := FromMap(map[string]any{
+		"ts": []time.Time{t1, t2},
+		"v1": []int64{1, 2},
+	})
+	if err != nil {
+		t.Fatalf("left FromMap error: %v", err)
+	}
+	right, err := FromMap(map[string]any{
+		"ts": []time.Time{t2, t1},
+		"v2": []int64{20, 10},
+	})
+	if err != nil {
+		t.Fatalf("right FromMap error: %v", err)
+	}
+	out, err := Join(left, right, []string{"ts"}, InnerJoin, [2]string{"", ""})
+	if err != nil {
+		t.Fatalf("Join error: %v", err)
+	}
+	rows, _ := out.Shape()
+	if rows != 2 {
+		t.Fatalf("expected 2 rows, got %d", rows)
+	}
+	r0, _ := out.Row(0)
+	if _, ok := r0["ts"].(time.Time); !ok {
+		t.Fatalf("expected time.Time join key type, got %T", r0["ts"])
 	}
 }

@@ -54,14 +54,14 @@ func (df *DataFrame) GroupBy(columns ...string) (*GroupBy, error) {
 	groups := make(map[string][]int)
 	for i := 0; i < df.rowLen; i++ {
 		keyParts := make(compositeKey, len(columns))
-		for _, colName := range columns {
+		for j, colName := range columns {
 			col, _ := df.Col(colName)
 			v, ok := col.at(i)
 			if !ok {
-				keyParts = append(keyParts, nil)
+				keyParts[j] = nil
 				continue
 			}
-			keyParts = append(keyParts, v)
+			keyParts[j] = v
 		}
 		key := encodeCompositeKey(keyParts)
 		groups[key] = append(groups[key], i)

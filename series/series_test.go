@@ -1,6 +1,11 @@
 package series
 
-import "testing"
+import (
+	"math"
+	"testing"
+
+	"github.com/kalpit-sharma-dev/gods/internal/util"
+)
 
 func TestSeriesBasics(t *testing.T) {
 	s := New("x", []int64{1, 2, 3})
@@ -44,5 +49,12 @@ func TestSeriesFillAndDropNull(t *testing.T) {
 	dropped := s.DropNa()
 	if dropped.Len() != 2 {
 		t.Fatalf("expected len 2 after dropna, got %d", dropped.Len())
+	}
+}
+
+func TestSeriesCastUint64Overflow(t *testing.T) {
+	s := New("u", []uint64{math.MaxUint64})
+	if _, err := s.Cast(util.DtypeInt64); err == nil {
+		t.Fatalf("expected overflow cast error, got nil")
 	}
 }

@@ -143,6 +143,30 @@ func (df *DataFrame) Rank(column, method string) (*series.Series[float64], error
 }
 
 func compareValues(a, b any) int {
+	if ai, ok := toInt64Exact(a); ok {
+		if bi, ok := toInt64Exact(b); ok {
+			switch {
+			case ai < bi:
+				return -1
+			case ai > bi:
+				return 1
+			default:
+				return 0
+			}
+		}
+	}
+	if au, ok := toUint64Exact(a); ok {
+		if bu, ok := toUint64Exact(b); ok {
+			switch {
+			case au < bu:
+				return -1
+			case au > bu:
+				return 1
+			default:
+				return 0
+			}
+		}
+	}
 	switch av := a.(type) {
 	case int:
 		return compareFloats(float64(av), toF64(b))
@@ -209,6 +233,40 @@ func compareValues(a, b any) int {
 			return -1
 		}
 		return 1
+	}
+}
+
+func toInt64Exact(v any) (int64, bool) {
+	switch x := v.(type) {
+	case int:
+		return int64(x), true
+	case int8:
+		return int64(x), true
+	case int16:
+		return int64(x), true
+	case int32:
+		return int64(x), true
+	case int64:
+		return x, true
+	default:
+		return 0, false
+	}
+}
+
+func toUint64Exact(v any) (uint64, bool) {
+	switch x := v.(type) {
+	case uint:
+		return uint64(x), true
+	case uint8:
+		return uint64(x), true
+	case uint16:
+		return uint64(x), true
+	case uint32:
+		return uint64(x), true
+	case uint64:
+		return x, true
+	default:
+		return 0, false
 	}
 }
 

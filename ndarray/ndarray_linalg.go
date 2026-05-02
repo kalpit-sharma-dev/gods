@@ -3,6 +3,7 @@ package ndarray
 import (
 	"fmt"
 	"math"
+	"sort"
 )
 
 // Dot computes dot product of two 1D vectors.
@@ -156,22 +157,57 @@ func SVD(a *NDArray[float64]) (U, S, Vt *NDArray[float64], err error) {
 	if len(a.shape) != 2 {
 		return nil, nil, nil, fmt.Errorf("gods/ndarray: svd requires 2D matrix, got %v", a.shape)
 	}
-	m, n := a.shape[0], a.shape[1]
-	k := m
-	if n < k {
-		k = n
+	// Compute eigendecomposition of A^T A to derive V and singular values.
+	ata, err := matMulTransposeLeft(a)
+	if err != nil {
+		return nil, nil, nil, err
 	}
-	svals := make([]float64, k)
-	for i := 0; i < k; i++ {
-		var sum float64
-		for r := 0; r < m; r++ {
-			sum += a.At(r, i) * a.At(r, i)
+	evals, evecs, err := jacobiEigenSym(ata)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	n := a.shape[1]
+	order := make([]int, n)
+	for i := range order {
+		order[i] = i
+	}
+	sort.Slice(order, func(i, j int) bool { return evals[order[i]] > evals[order[j]] })
+
+	svals := make([]float64, n)
+	vData := make([]float64, n*n)
+	for col := 0; col < n; col++ {
+		src := order[col]
+		lambda := evals[src]
+		if lambda < 0 {
+			lambda = 0
 		}
-		svals[i] = math.Sqrt(sum)
+		svals[col] = math.Sqrt(lambda)
+		for row := 0; row < n; row++ {
+			vData[row*n+col] = evecs[row*n+src]
+		}
 	}
-	u := identity(m)
-	vt := identity(n)
-	s := &NDArray[float64]{data: svals, shape: []int{k}, strides: []int{1}}
+	v := &NDArray[float64]{data: vData, shape: []int{n, n}, strides: []int{n, 1}}
+
+	// U = A * V * Sigma^{-1}
+	m := a.shape[0]
+	uData := make([]float64, m*n)
+	for j := 0; j < n; j++ {
+		sigma := svals[j]
+		if sigma <= 1e-12 {
+			continue
+		}
+		for i := 0; i < m; i++ {
+			var acc float64
+			for k := 0; k < n; k++ {
+				acc += a.At(i, k) * v.At(k, j)
+			}
+			uData[i*n+j] = acc / sigma
+		}
+	}
+	u := &NDArray[float64]{data: uData, shape: []int{m, n}, strides: []int{n, 1}}
+	vt := v.T()
+	s := &NDArray[float64]{data: svals, shape: []int{n}, strides: []int{1}}
 	return u, s, vt, nil
 }
 
@@ -202,19 +238,179 @@ func Solve(a, b *NDArray[float64]) (*NDArray[float64], error) {
 	if b.shape[0] != a.shape[0] {
 		return nil, fmt.Errorf("gods/ndarray: solve dimension mismatch a=%v b=%v", a.shape, b.shape)
 	}
-	ainv, err := Inv(a)
+	n := a.shape[0]
+	m := 1
+	if len(b.shape) == 2 {
+		m = b.shape[1]
+	}
+
+	// Build augmented RHS with 2D view.
+	b2 := make([]float64, n*m)
+	if len(b.shape) == 1 {
+		for i := 0; i < n; i++ {
+			b2[i] = b.At(i)
+		}
+	} else {
+		copy(b2, b.data)
+	}
+
+	lu, piv, err := luDecompose(a)
 	if err != nil {
 		return nil, err
 	}
-	if len(b.shape) == 1 {
-		b2, _ := b.Reshape(b.shape[0], 1)
-		x2, err := MatMul(ainv, b2)
-		if err != nil {
-			return nil, err
+	x := make([]float64, n*m)
+	work := make([]float64, n)
+	for col := 0; col < m; col++ {
+		for i := 0; i < n; i++ {
+			work[i] = b2[piv[i]*m+col]
 		}
-		return x2.Reshape(b.shape[0])
+		// Forward solve Ly = Pb.
+		for i := 0; i < n; i++ {
+			for j := 0; j < i; j++ {
+				work[i] -= lu[i*n+j] * work[j]
+			}
+		}
+		// Backward solve Ux = y.
+		for i := n - 1; i >= 0; i-- {
+			for j := i + 1; j < n; j++ {
+				work[i] -= lu[i*n+j] * work[j]
+			}
+			diag := lu[i*n+i]
+			if almostZero(diag) {
+				return nil, fmt.Errorf("gods/ndarray: singular matrix in solve")
+			}
+			work[i] /= diag
+		}
+		for i := 0; i < n; i++ {
+			x[i*m+col] = work[i]
+		}
 	}
-	return MatMul(ainv, b)
+
+	if len(b.shape) == 1 {
+		return &NDArray[float64]{data: x[:n], shape: []int{n}, strides: []int{1}}, nil
+	}
+	return &NDArray[float64]{data: x, shape: []int{n, m}, strides: []int{m, 1}}, nil
+}
+
+func luDecompose(a *NDArray[float64]) ([]float64, []int, error) {
+	if len(a.shape) != 2 || a.shape[0] != a.shape[1] {
+		return nil, nil, fmt.Errorf("gods/ndarray: LU requires square matrix, got %v", a.shape)
+	}
+	n := a.shape[0]
+	lu := make([]float64, len(a.data))
+	copy(lu, a.data)
+	piv := make([]int, n)
+	for i := range piv {
+		piv[i] = i
+	}
+	for k := 0; k < n; k++ {
+		pivot := k
+		maxVal := math.Abs(lu[k*n+k])
+		for i := k + 1; i < n; i++ {
+			if v := math.Abs(lu[i*n+k]); v > maxVal {
+				maxVal = v
+				pivot = i
+			}
+		}
+		if almostZero(maxVal) {
+			return nil, nil, fmt.Errorf("gods/ndarray: singular matrix")
+		}
+		if pivot != k {
+			piv[k], piv[pivot] = piv[pivot], piv[k]
+			for j := 0; j < n; j++ {
+				lu[k*n+j], lu[pivot*n+j] = lu[pivot*n+j], lu[k*n+j]
+			}
+		}
+		for i := k + 1; i < n; i++ {
+			lu[i*n+k] /= lu[k*n+k]
+			for j := k + 1; j < n; j++ {
+				lu[i*n+j] -= lu[i*n+k] * lu[k*n+j]
+			}
+		}
+	}
+	return lu, piv, nil
+}
+
+func matMulTransposeLeft(a *NDArray[float64]) (*NDArray[float64], error) {
+	if len(a.shape) != 2 {
+		return nil, fmt.Errorf("gods/ndarray: expected 2D matrix, got %v", a.shape)
+	}
+	m, n := a.shape[0], a.shape[1]
+	out := make([]float64, n*n)
+	for i := 0; i < n; i++ {
+		for j := i; j < n; j++ {
+			var acc float64
+			for r := 0; r < m; r++ {
+				acc += a.At(r, i) * a.At(r, j)
+			}
+			out[i*n+j] = acc
+			out[j*n+i] = acc
+		}
+	}
+	return &NDArray[float64]{data: out, shape: []int{n, n}, strides: []int{n, 1}}, nil
+}
+
+func jacobiEigenSym(a *NDArray[float64]) ([]float64, []float64, error) {
+	if len(a.shape) != 2 || a.shape[0] != a.shape[1] {
+		return nil, nil, fmt.Errorf("gods/ndarray: jacobi expects square matrix, got %v", a.shape)
+	}
+	n := a.shape[0]
+	mat := make([]float64, len(a.data))
+	copy(mat, a.data)
+	vecs := make([]float64, n*n)
+	for i := 0; i < n; i++ {
+		vecs[i*n+i] = 1
+	}
+	const maxIter = 128
+	for iter := 0; iter < maxIter; iter++ {
+		p, q := 0, 1
+		maxOff := 0.0
+		for i := 0; i < n; i++ {
+			for j := i + 1; j < n; j++ {
+				v := math.Abs(mat[i*n+j])
+				if v > maxOff {
+					maxOff = v
+					p, q = i, j
+				}
+			}
+		}
+		if maxOff < 1e-12 {
+			break
+		}
+		app := mat[p*n+p]
+		aqq := mat[q*n+q]
+		apq := mat[p*n+q]
+		phi := 0.5 * math.Atan2(2*apq, aqq-app)
+		c := math.Cos(phi)
+		s := math.Sin(phi)
+
+		for k := 0; k < n; k++ {
+			mkp := mat[k*n+p]
+			mkq := mat[k*n+q]
+			mat[k*n+p] = c*mkp - s*mkq
+			mat[k*n+q] = s*mkp + c*mkq
+		}
+		for k := 0; k < n; k++ {
+			mpk := mat[p*n+k]
+			mqk := mat[q*n+k]
+			mat[p*n+k] = c*mpk - s*mqk
+			mat[q*n+k] = s*mpk + c*mqk
+		}
+		mat[p*n+q] = 0
+		mat[q*n+p] = 0
+
+		for k := 0; k < n; k++ {
+			vkp := vecs[k*n+p]
+			vkq := vecs[k*n+q]
+			vecs[k*n+p] = c*vkp - s*vkq
+			vecs[k*n+q] = s*vkp + c*vkq
+		}
+	}
+	evals := make([]float64, n)
+	for i := 0; i < n; i++ {
+		evals[i] = mat[i*n+i]
+	}
+	return evals, vecs, nil
 }
 
 func identity(n int) *NDArray[float64] {

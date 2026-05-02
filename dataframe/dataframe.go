@@ -1,9 +1,12 @@
 package dataframe
 
 import (
+	"encoding/binary"
 	"fmt"
+	"math"
 	"math/rand"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -62,70 +65,53 @@ type DataFrame struct {
 type compositeKey []any
 
 func encodeCompositeKey(k compositeKey) string {
-	parts := make([]string, len(k))
-	for i, v := range k {
-		if v == nil {
-			parts[i] = "<nil>"
-			continue
-		}
-		parts[i] = fmt.Sprintf("%T:%v", v, v)
+	parts := make([]string, 0, len(k))
+	for _, v := range k {
+		parts = append(parts, encodeKeyPart(v))
 	}
 	return strings.Join(parts, "\x1f")
 }
 
-func decodeCompositeKey(encoded string) compositeKey {
-	if encoded == "" {
-		return compositeKey{}
+func encodeKeyPart(v any) string {
+	switch x := v.(type) {
+	case nil:
+		return "n:"
+	case int:
+		return "i:" + strconv.FormatInt(int64(x), 10)
+	case int8:
+		return "i:" + strconv.FormatInt(int64(x), 10)
+	case int16:
+		return "i:" + strconv.FormatInt(int64(x), 10)
+	case int32:
+		return "i:" + strconv.FormatInt(int64(x), 10)
+	case int64:
+		return "i:" + strconv.FormatInt(x, 10)
+	case uint:
+		return "u:" + strconv.FormatUint(uint64(x), 10)
+	case uint8:
+		return "u:" + strconv.FormatUint(uint64(x), 10)
+	case uint16:
+		return "u:" + strconv.FormatUint(uint64(x), 10)
+	case uint32:
+		return "u:" + strconv.FormatUint(uint64(x), 10)
+	case uint64:
+		return "u:" + strconv.FormatUint(x, 10)
+	case float32:
+		return "f:" + strconv.FormatUint(uint64(math.Float64bits(float64(x))), 16)
+	case float64:
+		return "f:" + strconv.FormatUint(math.Float64bits(x), 16)
+	case bool:
+		if x {
+			return "b:1"
+		}
+		return "b:0"
+	case string:
+		return "s:" + strconv.Quote(x)
+	case time.Time:
+		return "t:" + x.UTC().Format(time.RFC3339Nano)
+	default:
+		return "x:" + fmt.Sprintf("%T=%v", v, v)
 	}
-	parts := strings.Split(encoded, "\x1f")
-	out := make(compositeKey, len(parts))
-	for i, p := range parts {
-		if p == "<nil>" {
-			out[i] = nil
-			continue
-		}
-		typeIdx := strings.IndexByte(p, ':')
-		if typeIdx <= 0 || typeIdx+1 >= len(p) {
-			out[i] = p
-			continue
-		}
-		typeName := p[:typeIdx]
-		raw := p[typeIdx+1:]
-		switch typeName {
-		case "int":
-			var v int
-			if _, err := fmt.Sscanf(raw, "%d", &v); err == nil {
-				out[i] = v
-				continue
-			}
-		case "int64":
-			var v int64
-			if _, err := fmt.Sscanf(raw, "%d", &v); err == nil {
-				out[i] = v
-				continue
-			}
-		case "float64":
-			var v float64
-			if _, err := fmt.Sscanf(raw, "%f", &v); err == nil {
-				out[i] = v
-				continue
-			}
-		case "bool":
-			if raw == "true" {
-				out[i] = true
-				continue
-			}
-			if raw == "false" {
-				out[i] = false
-				continue
-			}
-		case "string":
-			out[i] = raw
-			continue
-		}
-		out[i] = raw
-	}
-	return out
 }
 
 func compareCompositeKey(a, b compositeKey) int {
@@ -147,6 +133,109 @@ func compareCompositeKey(a, b compositeKey) int {
 	default:
 		return 0
 	}
+}
+
+func compareInts(a int64, b any) int {
+	switch x := b.(type) {
+	case int:
+		return compareInt64(a, int64(x))
+	case int8:
+		return compareInt64(a, int64(x))
+	case int16:
+		return compareInt64(a, int64(x))
+	case int32:
+		return compareInt64(a, int64(x))
+	case int64:
+		return compareInt64(a, x)
+	case uint:
+		if x > math.MaxInt64 {
+			return -1
+		}
+		return compareInt64(a, int64(x))
+	case uint8:
+		return compareInt64(a, int64(x))
+	case uint16:
+		return compareInt64(a, int64(x))
+	case uint32:
+		return compareInt64(a, int64(x))
+	case uint64:
+		if x > math.MaxInt64 {
+			return -1
+		}
+		return compareInt64(a, int64(x))
+	default:
+		return compareFloats(float64(a), toF64(b))
+	}
+}
+
+func compareUints(a uint64, b any) int {
+	switch x := b.(type) {
+	case uint:
+		return compareUint64(a, uint64(x))
+	case uint8:
+		return compareUint64(a, uint64(x))
+	case uint16:
+		return compareUint64(a, uint64(x))
+	case uint32:
+		return compareUint64(a, uint64(x))
+	case uint64:
+		return compareUint64(a, x)
+	case int:
+		if x < 0 {
+			return 1
+		}
+		return compareUint64(a, uint64(x))
+	case int8:
+		if x < 0 {
+			return 1
+		}
+		return compareUint64(a, uint64(x))
+	case int16:
+		if x < 0 {
+			return 1
+		}
+		return compareUint64(a, uint64(x))
+	case int32:
+		if x < 0 {
+			return 1
+		}
+		return compareUint64(a, uint64(x))
+	case int64:
+		if x < 0 {
+			return 1
+		}
+		return compareUint64(a, uint64(x))
+	default:
+		return compareFloats(float64(a), toF64(b))
+	}
+}
+
+func compareInt64(a, b int64) int {
+	switch {
+	case a < b:
+		return -1
+	case a > b:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func compareUint64(a, b uint64) int {
+	switch {
+	case a < b:
+		return -1
+	case a > b:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func float64Bits(v float64) uint64 {
+	var bytes [8]byte
+	binary.LittleEndian.PutUint64(bytes[:], math.Float64bits(v))
+	return binary.LittleEndian.Uint64(bytes[:])
 }
 
 // New constructs a DataFrame from internal columns.

@@ -1,6 +1,7 @@
 package parallel
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/kalpit-sharma-dev/gods/dataframe"
@@ -58,4 +59,24 @@ func TestParallelDF(t *testing.T) {
 	if rows != 2 {
 		t.Fatalf("unexpected filtered rows: %d", rows)
 	}
+}
+
+func TestMapConcurrencyRaceSafety(t *testing.T) {
+	pool := NewPool(8)
+	s := series.New("x", make([]int64, 100_000))
+	for i := 0; i < s.Len(); i++ {
+		s.Set(i, int64(i))
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			out := Map(pool, s, func(v int64) int64 { return v + 1 }, 0)
+			if out.Len() != s.Len() {
+				t.Errorf("unexpected mapped len: got %d want %d", out.Len(), s.Len())
+			}
+		}()
+	}
+	wg.Wait()
 }
