@@ -1,0 +1,32 @@
+name: Go Push CI
+
+on:
+  push:
+    branches:
+      - "**"
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+      - ".github/ISSUE_TEMPLATE/**"
+      - ".github/PULL_REQUEST_TEMPLATE.md"
+      - ".github/pull_request_template.md"
+  workflow_dispatch:
+
+concurrency:
+  group: go-push-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  push-ci:
+    # Replace ORG/CI_TEMPLATES_REPO and ref
+    uses: ORG/CI_TEMPLATES_REPO/.github/workflows/go-ci-reusable.yml@main
+    with:
+      min_coverage: 0
+      run_benchmark_smoke: false
+      run_fuzz: false
+      run_govulncheck: false
+      run_gosec: false
+      pr_mode: false

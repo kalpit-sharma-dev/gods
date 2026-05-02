@@ -1,0 +1,26 @@
+name: Performance Benchmarks
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+  workflow_dispatch:
+
+concurrency:
+  group: perf-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  performance:
+    # Replace ORG/CI_TEMPLATES_REPO and ref.
+    uses: ORG/CI_TEMPLATES_REPO/.github/workflows/go-performance-reusable.yml@main
+    with:
+      benchmark_packages: "./..."
+      benchmark_pattern: "."
+      max_regression_pct: 20

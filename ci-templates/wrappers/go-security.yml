@@ -1,0 +1,21 @@
+name: Go Security
+
+on:
+  push:
+    branches:
+      - "**"
+    paths:
+      - "**/*.go"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/go-*.yml"
+  schedule:
+    - cron: "0 3 * * 1"
+  workflow_dispatch:
+
+jobs:
+  security:
+    # Replace ORG/CI_TEMPLATES_REPO and ref
+    uses: ORG/CI_TEMPLATES_REPO/.github/workflows/go-security-reusable.yml@main
+    with:
+      go_toolchain: "go1.25.9"

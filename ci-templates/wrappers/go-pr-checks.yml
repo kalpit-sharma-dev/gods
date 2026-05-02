@@ -1,0 +1,56 @@
+name: PR Checks
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+  workflow_dispatch:
+
+concurrency:
+  group: pr-checks-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      run_go_ci: ${{ steps.filter.outputs.go_ci }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Detect relevant file changes
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            go_ci:
+              - "**/*.go"
+              - "go.mod"
+              - "go.sum"
+              - ".github/workflows/**"
+              - ".github/dependabot.yml"
+              - ".github/CODEOWNERS"
+
+  pr-checks:
+    needs: changes
+    # Replace ORG/CI_TEMPLATES_REPO and ref
+    uses: ORG/CI_TEMPLATES_REPO/.github/workflows/go-ci-reusable.yml@main
+    with:
+      min_coverage: 45
+      run_go_ci: ${{ needs.changes.outputs.run_go_ci == 'true' }}
+      pr_mode: true
+      run_fuzz: true
+      fuzz_packages: |
+        ./pkg/foo:FuzzFooRoundTrip
+        ./pkg/bar:FuzzBarNoPanic
+      run_govulncheck: true
+      govuln_go_toolchain: go1.25.9
+      run_gosec: true
+      gosec_excludes: ""

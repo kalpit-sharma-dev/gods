@@ -1,0 +1,12 @@
+# Replace owners with your actual users/teams.
+# Example:
+# * @your-org/engineering
+* @your-org/engineering
+
+# Customize ownership boundaries by package/domain.
+/cmd/ @your-org/backend
+/internal/ @your-org/backend
+/pkg/ @your-org/backend
+
+# CI/release config ownership
+/.github/ @your-org/dev-experience
