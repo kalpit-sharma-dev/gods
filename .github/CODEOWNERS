@@ -1,0 +1,12 @@
+* @kalpit-sharma-dev
+
+# Core libraries
+/dataframe/ @kalpit-sharma-dev
+/ndarray/ @kalpit-sharma-dev
+/series/ @kalpit-sharma-dev
+/parallel/ @kalpit-sharma-dev
+/io/ @kalpit-sharma-dev
+/stats/ @kalpit-sharma-dev
+
+# CI and release config
+/.github/ @kalpit-sharma-dev
