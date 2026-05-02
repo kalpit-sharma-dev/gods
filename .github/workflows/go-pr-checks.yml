@@ -1,9 +1,6 @@
-name: Go Tests
+name: PR Checks
 
 on:
-  push:
-    branches:
-      - "**"
   pull_request:
     types:
       - opened
@@ -13,7 +10,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: go-tests-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: pr-checks-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
