@@ -324,11 +324,40 @@ func binaryOp[T Number](a, b *NDArray[T], fn func(T, T) T) (*NDArray[T], error) 
 	outSize := product(outShape)
 	out := make([]T, outSize)
 	outStrides := computeStrides(outShape)
+	if sameShape(outShape, a.shape) && sameShape(outShape, b.shape) {
+		for i := 0; i < outSize; i++ {
+			out[i] = fn(a.data[i], b.data[i])
+		}
+		return &NDArray[T]{data: out, shape: outShape, strides: outStrides}, nil
+	}
+	offsetA := len(outShape) - len(a.shape)
+	offsetB := len(outShape) - len(b.shape)
+	axis := make([]int, len(outShape))
 	for i := 0; i < outSize; i++ {
-		oidx := unflattenIndex(i, outShape, outStrides)
-		ai := broadcastFlatIndex(oidx, outShape, a.shape, a.strides)
-		bi := broadcastFlatIndex(oidx, outShape, b.shape, b.strides)
+		ai := 0
+		for ax := range a.shape {
+			idx := axis[offsetA+ax]
+			if a.shape[ax] == 1 {
+				idx = 0
+			}
+			ai += idx * a.strides[ax]
+		}
+		bi := 0
+		for ax := range b.shape {
+			idx := axis[offsetB+ax]
+			if b.shape[ax] == 1 {
+				idx = 0
+			}
+			bi += idx * b.strides[ax]
+		}
 		out[i] = fn(a.data[ai], b.data[bi])
+		for d := len(axis) - 1; d >= 0; d-- {
+			axis[d]++
+			if axis[d] < outShape[d] {
+				break
+			}
+			axis[d] = 0
+		}
 	}
 	return &NDArray[T]{data: out, shape: outShape, strides: outStrides}, nil
 }
@@ -344,11 +373,40 @@ func compareOp[T any](a, b *NDArray[T], fn func(T, T) bool) (*NDArray[bool], err
 	outSize := product(outShape)
 	out := make([]bool, outSize)
 	outStrides := computeStrides(outShape)
+	if sameShape(outShape, a.shape) && sameShape(outShape, b.shape) {
+		for i := 0; i < outSize; i++ {
+			out[i] = fn(a.data[i], b.data[i])
+		}
+		return &NDArray[bool]{data: out, shape: outShape, strides: outStrides}, nil
+	}
+	offsetA := len(outShape) - len(a.shape)
+	offsetB := len(outShape) - len(b.shape)
+	axis := make([]int, len(outShape))
 	for i := 0; i < outSize; i++ {
-		oidx := unflattenIndex(i, outShape, outStrides)
-		ai := broadcastFlatIndex(oidx, outShape, a.shape, a.strides)
-		bi := broadcastFlatIndex(oidx, outShape, b.shape, b.strides)
+		ai := 0
+		for ax := range a.shape {
+			idx := axis[offsetA+ax]
+			if a.shape[ax] == 1 {
+				idx = 0
+			}
+			ai += idx * a.strides[ax]
+		}
+		bi := 0
+		for ax := range b.shape {
+			idx := axis[offsetB+ax]
+			if b.shape[ax] == 1 {
+				idx = 0
+			}
+			bi += idx * b.strides[ax]
+		}
 		out[i] = fn(a.data[ai], b.data[bi])
+		for d := len(axis) - 1; d >= 0; d-- {
+			axis[d]++
+			if axis[d] < outShape[d] {
+				break
+			}
+			axis[d] = 0
+		}
 	}
 	return &NDArray[bool]{data: out, shape: outShape, strides: outStrides}, nil
 }
@@ -379,17 +437,16 @@ func broadcastShape(a, b []int) ([]int, error) {
 	return out, nil
 }
 
-func broadcastFlatIndex(outIdx, outShape, inShape, inStrides []int) int {
-	offset := len(outShape) - len(inShape)
-	flat := 0
-	for axis := range inShape {
-		idx := outIdx[axis+offset]
-		if inShape[axis] == 1 {
-			idx = 0
-		}
-		flat += idx * inStrides[axis]
+func sameShape(a, b []int) bool {
+	if len(a) != len(b) {
+		return false
 	}
-	return flat
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func reduceMinMax[T any](a *NDArray[T], axis int, isMin bool) *NDArray[T] {
