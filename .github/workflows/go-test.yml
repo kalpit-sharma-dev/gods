@@ -5,6 +5,19 @@ on:
     branches:
       - "**"
   pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+  workflow_dispatch:
+
+concurrency:
+  group: go-tests-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   test:
@@ -17,9 +30,19 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
 
       - name: Verify formatting
-        run: test -z "$(gofmt -l $(find . -name '*.go' -not -path './vendor/*'))"
+        run: |
+          unformatted="$(gofmt -l $(find . -name '*.go' -not -path './vendor/*'))"
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt-formatted:"
+            echo "$unformatted"
+            exit 1
+          fi
 
       - name: Vet
         run: go vet ./...
@@ -37,9 +60,59 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
 
       - name: Race Test
         run: go test -race ./...
+
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Coverage
+        run: go test ./... -covermode=atomic -coverprofile=coverage.out
+
+      - name: Enforce minimum coverage (60%)
+        shell: bash
+        run: |
+          total="$(go tool cover -func=coverage.out | awk '/^total:/ { sub(/%/, "", $3); print $3 }')"
+          echo "Total coverage: ${total}%"
+          awk -v total="$total" 'BEGIN { if (total+0 < 60) { exit 1 } }' || {
+            echo "Coverage check failed: ${total}% is below 60%"
+            exit 1
+          }
+
+  benchmark-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Benchmark smoke
+        run: go test ./... -run=^$ -bench=. -benchtime=1x -count=1
 
   fuzz-smoke:
     runs-on: ubuntu-latest
@@ -51,8 +124,42 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
 
       - name: Fuzz smoke tests (short)
         run: |
           go test ./dataframe -run=^$ -fuzz=FuzzJoinKeyDeterminism -fuzztime=5s
           go test ./ndarray -run=^$ -fuzz=FuzzReshapeRoundTrip -fuzztime=5s
+
+  pr-checks:
+    runs-on: ubuntu-latest
+    if: always()
+    needs:
+      - test
+      - race
+      - coverage
+      - benchmark-smoke
+      - fuzz-smoke
+    steps:
+      - name: Assert all checks passed
+        shell: bash
+        run: |
+          failures=0
+          for result in \
+            "${{ needs.test.result }}" \
+            "${{ needs.race.result }}" \
+            "${{ needs.coverage.result }}" \
+            "${{ needs.benchmark-smoke.result }}" \
+            "${{ needs.fuzz-smoke.result }}"; do
+            if [ "$result" != "success" ]; then
+              failures=$((failures+1))
+            fi
+          done
+          if [ "$failures" -ne 0 ]; then
+            echo "One or more required CI jobs did not succeed."
+            exit 1
+          fi
+          echo "All PR checks passed."
