@@ -8,7 +8,34 @@ import (
 )
 
 // Row is passed to filter and transformation predicates.
+// Callback-based APIs may reuse row storage across iterations for performance.
+// Copy the map if values need to be retained after callback returns.
 type Row map[string]any
+
+type rowView struct {
+	cols []column
+	row  Row
+}
+
+func newRowView(cols []column) *rowView {
+	row := make(Row, len(cols))
+	for _, c := range cols {
+		row[c.Name()] = nil
+	}
+	return &rowView{cols: cols, row: row}
+}
+
+func (v *rowView) at(i int) Row {
+	for _, c := range v.cols {
+		val, ok := c.at(i)
+		if !ok {
+			v.row[c.Name()] = nil
+			continue
+		}
+		v.row[c.Name()] = val
+	}
+	return v.row
+}
 
 // Filter returns rows where predicate returns true.
 func (df *DataFrame) Filter(predicate func(Row) bool) *DataFrame {
@@ -16,12 +43,9 @@ func (df *DataFrame) Filter(predicate func(Row) bool) *DataFrame {
 		return Empty()
 	}
 	mask := make([]bool, df.rowLen)
+	view := newRowView(df.cols)
 	for i := 0; i < df.rowLen; i++ {
-		row, err := df.Row(i)
-		if err != nil {
-			continue
-		}
-		mask[i] = predicate(Row(row))
+		mask[i] = predicate(view.at(i))
 	}
 	return df.filterWithMask(mask)
 }
@@ -148,12 +172,9 @@ func (df *DataFrame) Assign(newColName string, fn func(Row) (any, bool)) (*DataF
 	}
 	values := make([]any, df.rowLen)
 	nullMask := make([]bool, df.rowLen)
+	view := newRowView(df.cols)
 	for i := 0; i < df.rowLen; i++ {
-		row, err := df.Row(i)
-		if err != nil {
-			return nil, fmt.Errorf("gods/dataframe: assign row %d: %w", i, err)
-		}
-		v, ok := fn(Row(row))
+		v, ok := fn(view.at(i))
 		if !ok {
 			nullMask[i] = true
 			continue
