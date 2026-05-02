@@ -1,0 +1,259 @@
+name: PR Checks
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+  workflow_dispatch:
+
+concurrency:
+  group: pr-checks-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      run_go_ci: ${{ steps.filter.outputs.go_ci }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Detect relevant file changes
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            go_ci:
+              - "**/*.go"
+              - "go.mod"
+              - "go.sum"
+              - ".github/workflows/**"
+              - ".github/dependabot.yml"
+              - ".github/CODEOWNERS"
+
+  test:
+    needs: changes
+    if: needs.changes.outputs.run_go_ci == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Verify formatting
+        run: |
+          unformatted="$(gofmt -l $(find . -name '*.go' -not -path './vendor/*'))"
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt-formatted:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./...
+
+  race:
+    needs: changes
+    if: needs.changes.outputs.run_go_ci == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Race Test
+        run: go test -race ./...
+
+  coverage:
+    needs: changes
+    if: needs.changes.outputs.run_go_ci == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Coverage
+        run: go test ./... -covermode=atomic -coverprofile=coverage.out
+
+      - name: Enforce minimum coverage (30%)
+        shell: bash
+        run: |
+          min_coverage="30"
+          total="$(go tool cover -func=coverage.out | awk '/^total:/ { sub(/%/, "", $3); print $3 }')"
+          echo "Total coverage: ${total}%"
+          awk -v total="$total" -v min="$min_coverage" 'BEGIN { if (total+0 < min+0) { exit 1 } }' || {
+            echo "Coverage check failed: ${total}% is below ${min_coverage}%"
+            exit 1
+          }
+
+  benchmark-smoke:
+    needs: changes
+    if: needs.changes.outputs.run_go_ci == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Benchmark smoke
+        run: go test ./... -run=^$ -bench=. -benchtime=1x -count=1
+
+  fuzz-smoke:
+    needs: changes
+    if: needs.changes.outputs.run_go_ci == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Fuzz smoke tests (short)
+        run: |
+          go test ./dataframe -run=^$ -fuzz=FuzzJoinKeyDeterminism -fuzztime=5s
+          go test ./ndarray -run=^$ -fuzz=FuzzReshapeRoundTrip -fuzztime=5s
+
+  govulncheck:
+    needs: changes
+    if: needs.changes.outputs.run_go_ci == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Install govulncheck
+        env:
+          GOTOOLCHAIN: go1.25.9
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Run govulncheck
+        env:
+          GOTOOLCHAIN: go1.25.9
+        run: govulncheck ./...
+
+  gosec:
+    needs: changes
+    if: needs.changes.outputs.run_go_ci == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Install gosec
+        env:
+          GOTOOLCHAIN: go1.25.9
+        run: |
+          go install github.com/securego/gosec/v2/cmd/gosec@latest
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Run gosec
+        run: gosec -exclude=G115,G304,G306,G404 ./...
+
+  pr-checks:
+    runs-on: ubuntu-latest
+    if: always()
+    needs:
+      - changes
+      - test
+      - race
+      - coverage
+      - benchmark-smoke
+      - fuzz-smoke
+      - govulncheck
+      - gosec
+    steps:
+      - name: Assert all checks passed
+        shell: bash
+        run: |
+          if [ "${{ needs.changes.outputs.run_go_ci }}" != "true" ]; then
+            echo "No Go/workflow changes detected; heavy CI checks skipped."
+            exit 0
+          fi
+          failures=0
+          for result in \
+            "${{ needs.test.result }}" \
+            "${{ needs.race.result }}" \
+            "${{ needs.coverage.result }}" \
+            "${{ needs.benchmark-smoke.result }}" \
+            "${{ needs.fuzz-smoke.result }}" \
+            "${{ needs.govulncheck.result }}" \
+            "${{ needs.gosec.result }}"; do
+            if [ "$result" != "success" ]; then
+              failures=$((failures+1))
+            fi
+          done
+          if [ "$failures" -ne 0 ]; then
+            echo "One or more required CI jobs did not succeed."
+            exit 1
+          fi
+          echo "All PR checks passed."
