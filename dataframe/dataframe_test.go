@@ -72,6 +72,38 @@ func TestGroupByAgg(t *testing.T) {
 	}
 }
 
+func TestGroupByAggColumnOrderDeterministic(t *testing.T) {
+	df, err := FromMap(map[string]any{
+		"dept":   []string{"A", "A", "B"},
+		"salary": []float64{100, 200, 300},
+		"age":    []int64{20, 30, 40},
+	})
+	if err != nil {
+		t.Fatalf("FromMap error: %v", err)
+	}
+	gb, err := df.GroupBy("dept")
+	if err != nil {
+		t.Fatalf("GroupBy error: %v", err)
+	}
+	out, err := gb.Agg(map[string]AggFunc{
+		"salary": AggMean,
+		"age":    AggCount,
+	})
+	if err != nil {
+		t.Fatalf("Agg error: %v", err)
+	}
+	got := out.Columns()
+	want := []string{"dept", "age", "salary"}
+	if len(got) != len(want) {
+		t.Fatalf("unexpected column count: got=%d want=%d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("column order mismatch at %d: got=%q want=%q", i, got[i], want[i])
+		}
+	}
+}
+
 func TestGroupByTypedKeysRemainTyped(t *testing.T) {
 	df, err := FromMap(map[string]any{
 		"k": []int64{1, 1, 2},

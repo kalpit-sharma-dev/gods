@@ -47,17 +47,19 @@ func (df *DataFrame) GroupBy(columns ...string) (*GroupBy, error) {
 	if len(columns) == 0 {
 		return nil, fmt.Errorf("gods/dataframe: groupby requires at least one column")
 	}
-	for _, col := range columns {
-		if _, err := df.Col(col); err != nil {
+	byCols := make([]column, len(columns))
+	for i, col := range columns {
+		resolved, err := df.Col(col)
+		if err != nil {
 			return nil, err
 		}
+		byCols[i] = resolved
 	}
 	groups := make(map[string][]int)
 	keys := make(map[string]compositeKey)
 	for i := 0; i < df.rowLen; i++ {
 		keyParts := make(compositeKey, len(columns))
-		for j, colName := range columns {
-			col, _ := df.Col(colName)
+		for j, col := range byCols {
 			v, ok := col.at(i)
 			if !ok {
 				keyParts[j] = nil
@@ -88,40 +90,75 @@ func (g *GroupBy) Agg(spec map[string]AggFunc) (*DataFrame, error) {
 		return nil, fmt.Errorf("gods/dataframe: empty aggregation spec")
 	}
 	groupKeys := g.orderedGroupKeys()
-	rows := make([]map[string]any, 0, len(groupKeys))
-	for _, gk := range groupKeys {
+	byCols := make([]column, len(g.byKeys))
+	for i, by := range g.byKeys {
+		col, err := g.df.Col(by)
+		if err != nil {
+			return nil, err
+		}
+		byCols[i] = col
+	}
+	specNames := make([]string, 0, len(spec))
+	for name := range spec {
+		specNames = append(specNames, name)
+	}
+	sort.Strings(specNames)
+	specCols := make([]column, len(specNames))
+	specFns := make([]AggFunc, len(specNames))
+	for i, colName := range specNames {
+		col, err := g.df.Col(colName)
+		if err != nil {
+			return nil, err
+		}
+		specCols[i] = col
+		specFns[i] = spec[colName]
+	}
+	totalCols := len(g.byKeys) + len(specNames)
+	columnNames := make([]string, 0, totalCols)
+	columnNames = append(columnNames, g.byKeys...)
+	columnNames = append(columnNames, specNames...)
+	columnValues := make([][]any, totalCols)
+	columnNulls := make([][]bool, totalCols)
+	for i := range columnValues {
+		columnValues[i] = make([]any, len(groupKeys))
+		columnNulls[i] = make([]bool, len(groupKeys))
+	}
+	for rowIdx, gk := range groupKeys {
 		indices := g.groups[gk]
-		row := map[string]any{}
 		if len(indices) > 0 {
 			anchor := indices[0]
-			for _, by := range g.byKeys {
-				col, err := g.df.Col(by)
-				if err != nil {
-					return nil, err
-				}
+			for colIdx, col := range byCols {
 				v, ok := col.at(anchor)
 				if !ok {
-					row[by] = nil
+					columnNulls[colIdx][rowIdx] = true
 					continue
 				}
-				row[by] = v
+				columnValues[colIdx][rowIdx] = v
+			}
+		} else {
+			for colIdx := range byCols {
+				columnNulls[colIdx][rowIdx] = true
 			}
 		}
-		for colName, fn := range spec {
-			col, err := g.df.Col(colName)
-			if err != nil {
-				return nil, err
-			}
-			val, valid := aggregateColumn(col, indices, fn)
+		base := len(g.byKeys)
+		for i := range specCols {
+			val, valid := aggregateColumn(specCols[i], indices, specFns[i])
 			if !valid {
-				row[colName] = nil
-			} else {
-				row[colName] = val
+				columnNulls[base+i][rowIdx] = true
+				continue
 			}
+			columnValues[base+i][rowIdx] = val
 		}
-		rows = append(rows, row)
 	}
-	return dataFrameFromRows(rows)
+	builtCols := make([]column, 0, totalCols)
+	for i, name := range columnNames {
+		col, err := inferSeriesColumn(name, columnValues[i], columnNulls[i])
+		if err != nil {
+			return nil, fmt.Errorf("gods/dataframe: infer agg column %q: %w", name, err)
+		}
+		builtCols = append(builtCols, col)
+	}
+	return New(builtCols...)
 }
 
 // Apply applies a function to each group and concatenates outputs.
@@ -225,88 +262,109 @@ func aggregateColumn(col column, indices []int, fn AggFunc) (any, bool) {
 		return aggregateFloat64Series(s, indices, fn)
 	}
 
-	validVals := make([]any, 0, len(indices))
-	for _, idx := range indices {
-		v, ok := col.at(idx)
-		if ok {
-			validVals = append(validVals, v)
-		}
-	}
 	switch fn {
 	case AggCount:
-		return int64(len(validVals)), true
-	case AggFirst:
-		if len(validVals) == 0 {
-			return nil, false
-		}
-		return validVals[0], true
-	case AggLast:
-		if len(validVals) == 0 {
-			return nil, false
-		}
-		return validVals[len(validVals)-1], true
-	case AggMin:
-		if len(validVals) == 0 {
-			return nil, false
-		}
-		min := validVals[0]
-		for _, v := range validVals[1:] {
-			if compareValues(v, min) < 0 {
-				min = v
+		var count int64
+		for _, idx := range indices {
+			_, ok := col.at(idx)
+			if ok {
+				count++
 			}
+		}
+		return count, true
+	case AggFirst:
+		for _, idx := range indices {
+			v, ok := col.at(idx)
+			if ok {
+				return v, true
+			}
+		}
+		return nil, false
+	case AggLast:
+		for i := len(indices) - 1; i >= 0; i-- {
+			v, ok := col.at(indices[i])
+			if ok {
+				return v, true
+			}
+		}
+		return nil, false
+	case AggMin:
+		var min any
+		found := false
+		for _, idx := range indices {
+			v, ok := col.at(idx)
+			if !ok {
+				continue
+			}
+			if !found || compareValues(v, min) < 0 {
+				min = v
+				found = true
+			}
+		}
+		if !found {
+			return nil, false
 		}
 		return min, true
 	case AggMax:
-		if len(validVals) == 0 {
-			return nil, false
-		}
-		max := validVals[0]
-		for _, v := range validVals[1:] {
-			if compareValues(v, max) > 0 {
-				max = v
+		var max any
+		found := false
+		for _, idx := range indices {
+			v, ok := col.at(idx)
+			if !ok {
+				continue
 			}
+			if !found || compareValues(v, max) > 0 {
+				max = v
+				found = true
+			}
+		}
+		if !found {
+			return nil, false
 		}
 		return max, true
 	case AggSum, AggMean, AggStd:
-		if len(validVals) == 0 {
-			return nil, false
-		}
-		nums := make([]float64, 0, len(validVals))
-		for _, v := range validVals {
-			if n, ok := numericToFloat64(v); ok {
-				nums = append(nums, n)
+		var count int
+		var sum float64
+		var sumSq float64
+		for _, idx := range indices {
+			v, ok := col.at(idx)
+			if !ok {
 				continue
 			}
-			if s, ok := v.(string); ok {
+			if n, ok := numericToFloat64(v); ok {
+				count++
+				sum += n
+				sumSq += n * n
+				continue
+			}
+			s, ok := v.(string)
+			if ok {
 				n, err := strconv.ParseFloat(s, 64)
 				if err == nil {
-					nums = append(nums, n)
+					count++
+					sum += n
+					sumSq += n * n
 				}
 			}
 		}
-		if len(nums) == 0 {
+		if count == 0 {
 			return nil, false
-		}
-		var sum float64
-		for _, n := range nums {
-			sum += n
 		}
 		switch fn {
 		case AggSum:
 			return sum, true
 		case AggMean:
-			return sum / float64(len(nums)), true
+			return sum / float64(count), true
 		case AggStd:
-			if len(nums) < 2 {
+			if count < 2 {
 				return float64(0), true
 			}
-			mean := sum / float64(len(nums))
-			var acc float64
-			for _, n := range nums {
-				d := n - mean
-				acc += d * d
+			// Sample variance using stable one-pass sums.
+			variance := (sumSq - (sum*sum)/float64(count)) / float64(count-1)
+			if variance < 0 {
+				variance = 0
 			}
-			return math.Sqrt(acc / float64(len(nums)-1)), true
+			return math.Sqrt(variance), true
 		}
 	}
 	return nil, false
@@ -331,14 +389,38 @@ func (g *GroupBy) orderedGroupKeys() []string {
 }
 
 func aggregateInt64Series(s *series.Series[int64], indices []int, fn AggFunc) (any, bool) {
-	valid := make([]int64, 0, len(indices))
+	var count int
+	var first int64
+	var last int64
+	var min int64
+	var max int64
+	var sum int64
+	var sumF float64
+	var sumSq float64
 	for _, idx := range indices {
 		v, ok := s.At(idx)
-		if ok {
-			valid = append(valid, v)
+		if !ok {
+			continue
 		}
+		if count == 0 {
+			first = v
+			min = v
+			max = v
+		}
+		last = v
+		if v < min {
+			min = v
+		}
+		if v > max {
+			max = v
+		}
+		sum += v
+		fv := float64(v)
+		sumF += fv
+		sumSq += fv * fv
+		count++
 	}
-	if len(valid) == 0 {
+	if count == 0 {
 		if fn == AggCount {
 			return int64(0), true
 		}
@@ -346,68 +428,63 @@ func aggregateInt64Series(s *series.Series[int64], indices []int, fn AggFunc) (a
 	}
 	switch fn {
 	case AggCount:
-		return int64(len(valid)), true
+		return int64(count), true
 	case AggFirst:
-		return valid[0], true
+		return first, true
 	case AggLast:
-		return valid[len(valid)-1], true
+		return last, true
 	case AggMin:
-		min := valid[0]
-		for _, v := range valid[1:] {
-			if v < min {
-				min = v
-			}
-		}
 		return min, true
 	case AggMax:
-		max := valid[0]
-		for _, v := range valid[1:] {
-			if v > max {
-				max = v
-			}
-		}
 		return max, true
 	case AggSum:
-		var sum int64
-		for _, v := range valid {
-			sum += v
-		}
 		return sum, true
 	case AggMean:
-		var sum float64
-		for _, v := range valid {
-			sum += float64(v)
-		}
-		return sum / float64(len(valid)), true
+		return sumF / float64(count), true
 	case AggStd:
-		if len(valid) < 2 {
+		if count < 2 {
 			return float64(0), true
 		}
-		var sum float64
-		for _, v := range valid {
-			sum += float64(v)
+		variance := (sumSq - (sumF*sumF)/float64(count)) / float64(count-1)
+		if variance < 0 {
+			variance = 0
 		}
-		mean := sum / float64(len(valid))
-		var acc float64
-		for _, v := range valid {
-			d := float64(v) - mean
-			acc += d * d
-		}
-		return math.Sqrt(acc / float64(len(valid)-1)), true
+		return math.Sqrt(variance), true
 	default:
 		return nil, false
 	}
 }
 
 func aggregateFloat64Series(s *series.Series[float64], indices []int, fn AggFunc) (any, bool) {
-	valid := make([]float64, 0, len(indices))
+	var count int
+	var first float64
+	var last float64
+	var min float64
+	var max float64
+	var sum float64
+	var sumSq float64
 	for _, idx := range indices {
 		v, ok := s.At(idx)
-		if ok {
-			valid = append(valid, v)
+		if !ok {
+			continue
 		}
+		if count == 0 {
+			first = v
+			min = v
+			max = v
+		}
+		last = v
+		if v < min {
+			min = v
+		}
+		if v > max {
+			max = v
+		}
+		sum += v
+		sumSq += v * v
+		count++
 	}
-	if len(valid) == 0 {
+	if count == 0 {
 		if fn == AggCount {
 			return int64(0), true
 		}
@@ -415,54 +492,28 @@ func aggregateFloat64Series(s *series.Series[float64], indices []int, fn AggFunc
 	}
 	switch fn {
 	case AggCount:
-		return int64(len(valid)), true
+		return int64(count), true
 	case AggFirst:
-		return valid[0], true
+		return first, true
 	case AggLast:
-		return valid[len(valid)-1], true
+		return last, true
 	case AggMin:
-		min := valid[0]
-		for _, v := range valid[1:] {
-			if v < min {
-				min = v
-			}
-		}
 		return min, true
 	case AggMax:
-		max := valid[0]
-		for _, v := range valid[1:] {
-			if v > max {
-				max = v
-			}
-		}
 		return max, true
 	case AggSum:
-		var sum float64
-		for _, v := range valid {
-			sum += v
-		}
 		return sum, true
 	case AggMean:
-		var sum float64
-		for _, v := range valid {
-			sum += v
-		}
-		return sum / float64(len(valid)), true
+		return sum / float64(count), true
 	case AggStd:
-		if len(valid) < 2 {
+		if count < 2 {
 			return float64(0), true
 		}
-		var sum float64
-		for _, v := range valid {
-			sum += v
+		variance := (sumSq - (sum*sum)/float64(count)) / float64(count-1)
+		if variance < 0 {
+			variance = 0
 		}
-		mean := sum / float64(len(valid))
-		var acc float64
-		for _, v := range valid {
-			d := v - mean
-			acc += d * d
-		}
-		return math.Sqrt(acc / float64(len(valid)-1)), true
+		return math.Sqrt(variance), true
 	default:
 		return nil, false
 	}
