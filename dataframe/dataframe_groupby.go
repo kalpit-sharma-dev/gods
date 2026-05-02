@@ -36,6 +36,7 @@ type GroupBy struct {
 	df     *DataFrame
 	byKeys []string
 	groups map[string][]int
+	keys   map[string]compositeKey
 }
 
 // GroupBy groups DataFrame rows by key columns.
@@ -52,6 +53,7 @@ func (df *DataFrame) GroupBy(columns ...string) (*GroupBy, error) {
 		}
 	}
 	groups := make(map[string][]int)
+	keys := make(map[string]compositeKey)
 	for i := 0; i < df.rowLen; i++ {
 		keyParts := make(compositeKey, len(columns))
 		for j, colName := range columns {
@@ -64,9 +66,17 @@ func (df *DataFrame) GroupBy(columns ...string) (*GroupBy, error) {
 			keyParts[j] = v
 		}
 		key := encodeCompositeKey(keyParts)
+		if _, seen := keys[key]; !seen {
+			keys[key] = keyParts
+		}
 		groups[key] = append(groups[key], i)
 	}
-	return &GroupBy{df: df, byKeys: append([]string(nil), columns...), groups: groups}, nil
+	return &GroupBy{
+		df:     df,
+		byKeys: append([]string(nil), columns...),
+		groups: groups,
+		keys:   keys,
+	}, nil
 }
 
 // Agg aggregates columns based on the provided specification.
@@ -77,11 +87,7 @@ func (g *GroupBy) Agg(spec map[string]AggFunc) (*DataFrame, error) {
 	if len(spec) == 0 {
 		return nil, fmt.Errorf("gods/dataframe: empty aggregation spec")
 	}
-	groupKeys := make([]string, 0, len(g.groups))
-	for k := range g.groups {
-		groupKeys = append(groupKeys, k)
-	}
-	sort.Strings(groupKeys)
+	groupKeys := g.orderedGroupKeys()
 	rows := make([]map[string]any, 0, len(groupKeys))
 	for _, gk := range groupKeys {
 		indices := g.groups[gk]
@@ -126,11 +132,7 @@ func (g *GroupBy) Apply(fn func(group *DataFrame) (*DataFrame, error)) (*DataFra
 	if fn == nil {
 		return nil, fmt.Errorf("gods/dataframe: nil apply function")
 	}
-	groupKeys := make([]string, 0, len(g.groups))
-	for k := range g.groups {
-		groupKeys = append(groupKeys, k)
-	}
-	sort.Strings(groupKeys)
+	groupKeys := g.orderedGroupKeys()
 	dfs := make([]*DataFrame, 0, len(groupKeys))
 	for _, k := range groupKeys {
 		sub, err := g.df.selectRows(g.groups[k])
@@ -151,11 +153,7 @@ func (g *GroupBy) Size() (*series.Series[int64], error) {
 	if g == nil || g.df == nil {
 		return nil, fmt.Errorf("gods/dataframe: nil groupby")
 	}
-	groupKeys := make([]string, 0, len(g.groups))
-	for k := range g.groups {
-		groupKeys = append(groupKeys, k)
-	}
-	sort.Strings(groupKeys)
+	groupKeys := g.orderedGroupKeys()
 	values := make([]int64, len(groupKeys))
 	for i, k := range groupKeys {
 		values[i] = int64(len(g.groups[k]))
@@ -220,6 +218,13 @@ func (g *GroupBy) Transform(column string, fn func(*DataFrame) any) (*series.Ser
 }
 
 func aggregateColumn(col column, indices []int, fn AggFunc) (any, bool) {
+	switch s := col.toSeriesAny().(type) {
+	case *series.Series[int64]:
+		return aggregateInt64Series(s, indices, fn)
+	case *series.Series[float64]:
+		return aggregateFloat64Series(s, indices, fn)
+	}
+
 	validVals := make([]any, 0, len(indices))
 	for _, idx := range indices {
 		v, ok := col.at(idx)
@@ -305,4 +310,160 @@ func aggregateColumn(col column, indices []int, fn AggFunc) (any, bool) {
 		}
 	}
 	return nil, false
+}
+
+func (g *GroupBy) orderedGroupKeys() []string {
+	groupKeys := make([]string, 0, len(g.groups))
+	for k := range g.groups {
+		groupKeys = append(groupKeys, k)
+	}
+	sort.Slice(groupKeys, func(i, j int) bool {
+		ki, iok := g.keys[groupKeys[i]]
+		kj, jok := g.keys[groupKeys[j]]
+		if iok && jok {
+			if cmp := compareCompositeKey(ki, kj); cmp != 0 {
+				return cmp < 0
+			}
+		}
+		return groupKeys[i] < groupKeys[j]
+	})
+	return groupKeys
+}
+
+func aggregateInt64Series(s *series.Series[int64], indices []int, fn AggFunc) (any, bool) {
+	valid := make([]int64, 0, len(indices))
+	for _, idx := range indices {
+		v, ok := s.At(idx)
+		if ok {
+			valid = append(valid, v)
+		}
+	}
+	if len(valid) == 0 {
+		if fn == AggCount {
+			return int64(0), true
+		}
+		return nil, false
+	}
+	switch fn {
+	case AggCount:
+		return int64(len(valid)), true
+	case AggFirst:
+		return valid[0], true
+	case AggLast:
+		return valid[len(valid)-1], true
+	case AggMin:
+		min := valid[0]
+		for _, v := range valid[1:] {
+			if v < min {
+				min = v
+			}
+		}
+		return min, true
+	case AggMax:
+		max := valid[0]
+		for _, v := range valid[1:] {
+			if v > max {
+				max = v
+			}
+		}
+		return max, true
+	case AggSum:
+		var sum int64
+		for _, v := range valid {
+			sum += v
+		}
+		return sum, true
+	case AggMean:
+		var sum float64
+		for _, v := range valid {
+			sum += float64(v)
+		}
+		return sum / float64(len(valid)), true
+	case AggStd:
+		if len(valid) < 2 {
+			return float64(0), true
+		}
+		var sum float64
+		for _, v := range valid {
+			sum += float64(v)
+		}
+		mean := sum / float64(len(valid))
+		var acc float64
+		for _, v := range valid {
+			d := float64(v) - mean
+			acc += d * d
+		}
+		return math.Sqrt(acc / float64(len(valid)-1)), true
+	default:
+		return nil, false
+	}
+}
+
+func aggregateFloat64Series(s *series.Series[float64], indices []int, fn AggFunc) (any, bool) {
+	valid := make([]float64, 0, len(indices))
+	for _, idx := range indices {
+		v, ok := s.At(idx)
+		if ok {
+			valid = append(valid, v)
+		}
+	}
+	if len(valid) == 0 {
+		if fn == AggCount {
+			return int64(0), true
+		}
+		return nil, false
+	}
+	switch fn {
+	case AggCount:
+		return int64(len(valid)), true
+	case AggFirst:
+		return valid[0], true
+	case AggLast:
+		return valid[len(valid)-1], true
+	case AggMin:
+		min := valid[0]
+		for _, v := range valid[1:] {
+			if v < min {
+				min = v
+			}
+		}
+		return min, true
+	case AggMax:
+		max := valid[0]
+		for _, v := range valid[1:] {
+			if v > max {
+				max = v
+			}
+		}
+		return max, true
+	case AggSum:
+		var sum float64
+		for _, v := range valid {
+			sum += v
+		}
+		return sum, true
+	case AggMean:
+		var sum float64
+		for _, v := range valid {
+			sum += v
+		}
+		return sum / float64(len(valid)), true
+	case AggStd:
+		if len(valid) < 2 {
+			return float64(0), true
+		}
+		var sum float64
+		for _, v := range valid {
+			sum += v
+		}
+		mean := sum / float64(len(valid))
+		var acc float64
+		for _, v := range valid {
+			d := v - mean
+			acc += d * d
+		}
+		return math.Sqrt(acc / float64(len(valid)-1)), true
+	default:
+		return nil, false
+	}
 }

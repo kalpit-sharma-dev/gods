@@ -17,6 +17,7 @@ type CSVReadOptions struct {
 	HasHeader   bool
 	SkipRows    int
 	NullValues  []string
+	KeepNaN     bool
 	InferDtypes bool
 	ChunkSize   int
 	Columns     []string
@@ -29,6 +30,7 @@ func DefaultCSVReadOptions() CSVReadOptions {
 		Delimiter:   ',',
 		HasHeader:   true,
 		NullValues:  []string{"", "NA", "NaN", "null"},
+		KeepNaN:     false,
 		InferDtypes: true,
 	}
 }
@@ -237,7 +239,7 @@ func recordsToDataFrame(records [][]string, opts CSVReadOptions) (*dataframe.Dat
 		values := colValues[h]
 		nullMask := make([]bool, len(values))
 		for i, v := range values {
-			if isNullValue(v, opts.NullValues) {
+			if isNullValue(v, opts.NullValues, opts.KeepNaN) {
 				nullMask[i] = true
 			}
 		}
@@ -311,8 +313,11 @@ func parseAllBool(values []string, nullMask []bool) ([]bool, bool) {
 	return out, true
 }
 
-func isNullValue(v string, nullValues []string) bool {
+func isNullValue(v string, nullValues []string, keepNaN bool) bool {
 	for _, nv := range nullValues {
+		if keepNaN && (v == "NaN" || v == "nan" || v == "NAN") && (nv == "NaN" || nv == "nan" || nv == "NAN") {
+			continue
+		}
 		if v == nv {
 			return true
 		}
@@ -329,6 +334,7 @@ func mergeReadOptions(base, in CSVReadOptions) CSVReadOptions {
 	if len(in.NullValues) > 0 {
 		base.NullValues = append([]string(nil), in.NullValues...)
 	}
+	base.KeepNaN = in.KeepNaN
 	base.InferDtypes = in.InferDtypes
 	base.ChunkSize = in.ChunkSize
 	base.MaxRows = in.MaxRows

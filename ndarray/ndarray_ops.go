@@ -178,6 +178,39 @@ func (a *NDArray[T]) Sum(axis int) *NDArray[T] {
 		}
 		return &NDArray[T]{data: out, shape: []int{r}, strides: []int{1}}
 	}
+	if axis >= 0 && axis < len(a.shape) {
+		outShape := append([]int(nil), a.shape[:axis]...)
+		outShape = append(outShape, a.shape[axis+1:]...)
+		if len(outShape) == 0 {
+			var total T
+			for _, v := range a.data {
+				total = addAny(total, v)
+			}
+			return &NDArray[T]{data: []T{total}, shape: []int{1}, strides: []int{1}}
+		}
+		outData := make([]T, product(outShape))
+		outStrides := computeStrides(outShape)
+		outIdx := make([]int, len(outShape))
+		fullIdx := make([]int, len(a.shape))
+		for flat := 0; flat < len(outData); flat++ {
+			outIdx = unflattenIndex(flat, outShape, outStrides)
+			oi := 0
+			for ai := 0; ai < len(a.shape); ai++ {
+				if ai == axis {
+					continue
+				}
+				fullIdx[ai] = outIdx[oi]
+				oi++
+			}
+			var acc T
+			for k := 0; k < a.shape[axis]; k++ {
+				fullIdx[axis] = k
+				acc = addAny(acc, a.At(fullIdx...))
+			}
+			outData[flat] = acc
+		}
+		return &NDArray[T]{data: outData, shape: outShape, strides: outStrides}
+	}
 	return a.Sum(-1)
 }
 
@@ -228,6 +261,39 @@ func (a *NDArray[T]) Mean(axis int) *NDArray[float64] {
 			out[i] /= float64(c)
 		}
 		return &NDArray[float64]{data: out, shape: []int{r}, strides: []int{1}}
+	}
+	if axis >= 0 && axis < len(a.shape) {
+		outShape := append([]int(nil), a.shape[:axis]...)
+		outShape = append(outShape, a.shape[axis+1:]...)
+		if len(outShape) == 0 {
+			var sum float64
+			for _, v := range a.data {
+				sum += toFloat(v)
+			}
+			return &NDArray[float64]{data: []float64{sum / float64(len(a.data))}, shape: []int{1}, strides: []int{1}}
+		}
+		outData := make([]float64, product(outShape))
+		outStrides := computeStrides(outShape)
+		outIdx := make([]int, len(outShape))
+		fullIdx := make([]int, len(a.shape))
+		for flat := 0; flat < len(outData); flat++ {
+			outIdx = unflattenIndex(flat, outShape, outStrides)
+			oi := 0
+			for ai := 0; ai < len(a.shape); ai++ {
+				if ai == axis {
+					continue
+				}
+				fullIdx[ai] = outIdx[oi]
+				oi++
+			}
+			var sum float64
+			for k := 0; k < a.shape[axis]; k++ {
+				fullIdx[axis] = k
+				sum += toFloat(a.At(fullIdx...))
+			}
+			outData[flat] = sum / float64(a.shape[axis])
+		}
+		return &NDArray[float64]{data: outData, shape: outShape, strides: outStrides}
 	}
 	return a.Mean(-1)
 }

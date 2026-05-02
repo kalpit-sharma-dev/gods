@@ -80,10 +80,22 @@ func Join(left, right *DataFrame, on []string, how JoinType, suffixes [2]string)
 	}
 
 	keyOrder := make([]string, 0, len(keys))
+	keyValues := make(map[string]compositeKey, len(keys))
 	for k := range keys {
 		keyOrder = append(keyOrder, k)
+		if li := leftIndex[k]; len(li) > 0 {
+			keyValues[k] = joinKey(left, li[0], on)
+			continue
+		}
+		if ri := rightIndex[k]; len(ri) > 0 {
+			keyValues[k] = joinKey(right, ri[0], on)
+			continue
+		}
+		keyValues[k] = compositeKey{}
 	}
-	sort.Strings(keyOrder)
+	sort.Slice(keyOrder, func(i, j int) bool {
+		return compareCompositeKey(keyValues[keyOrder[i]], keyValues[keyOrder[j]]) < 0
+	})
 
 	rightNameMap := buildJoinedNameMap(right, on, suffixes[1], left.index)
 	leftNameMap := buildJoinedNameMap(left, on, suffixes[0], right.index)
